@@ -2,6 +2,8 @@
 
 A Skyrim SE SKSE plugin for grabbing, dragging, and throwing NPCs using Havok physics springs.
 
+**[Nexus Mods Page](https://www.nexusmods.com/skyrimspecialedition/mods/178446)** — download releases, screenshots, and discussion.
+
 ## Features
 
 - **Grab** NPCs with a configurable action key (default: G)
