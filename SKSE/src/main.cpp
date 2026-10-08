@@ -3,7 +3,6 @@
 
 namespace
 {
-    constexpr auto VERSION = "0.1.98-alpha";
     constexpr auto BUILD = __DATE__ " " __TIME__;
 
     void InitializeLog()
@@ -19,7 +18,7 @@ namespace
         log->flush_on(spdlog::level::info);
         spdlog::set_default_logger(std::move(log));
         spdlog::set_pattern("[%H:%M:%S:%e] [%l] %v");
-        SKSE::log::info("DragAndDrop v{} [{}]", VERSION, BUILD);
+        SKSE::log::info("DragAndDrop v{} [{}]", DRAGANDDROP_VERSION, BUILD);
     }
 
     void MessageHandler(SKSE::MessagingInterface::Message* a_message)
@@ -77,7 +76,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 {
     SKSE::Init(a_skse);
     InitializeLog();
-    SKSE::log::info("Game version: {} | Plugin: v{} [{}]", a_skse->RuntimeVersion().string(), VERSION, BUILD);
+    SKSE::log::info("Game version: {} | Plugin: v{} [{}]", a_skse->RuntimeVersion().string(), DRAGANDDROP_VERSION, BUILD);
 
     const auto messaging = SKSE::GetMessagingInterface();
     messaging->RegisterListener(MessageHandler);

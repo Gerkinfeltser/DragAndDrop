@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -59,6 +60,7 @@ private:
 
     RE::Actor* grabbedActor{ nullptr };
     State state{ State::None };
+    std::uint64_t grabGeneration{ 0 };
 
     bool actionKeyHeld{ false };
     bool actionNotified{ false };

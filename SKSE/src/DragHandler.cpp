@@ -12,7 +12,11 @@
 #include "RE/B/bhkCollisionObject.h"
 #include "RE/B/bhkRigidBody.h"
 #include "RE/B/BShkbAnimationGraph.h"
+#include "RE/H/hkpMouseSpringAction.h"
+#include "RE/H/hkpEntity.h"
 #include "RE/T/TESDataHandler.h"
+#include "RE/S/SendHUDMessage.h"
+
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
@@ -103,33 +107,40 @@ namespace
 
         return bodies;
     }
-    RE::hkpRigidBody* GetSpringBody(RE::PlayerCharacter* a_player)
+    RE::hkpMouseSpringAction* GetSpringAction(RE::PlayerCharacter* a_player, bool a_requireEntity = false)
     {
         if (!a_player) return nullptr;
-        auto& grabSpring = a_player->GetPlayerRuntimeData().grabSpring;
+        auto& grabSpring = a_player->GetPlayerRuntimeData().grabData.grabSpring;
         for (auto& springRef : grabSpring) {
             if (!springRef) continue;
-            auto bhkObj = reinterpret_cast<RE::bhkRefObject*>(springRef.get());
-            if (!bhkObj || !bhkObj->referencedObject) continue;
-            auto actionBase = reinterpret_cast<std::uintptr_t>(bhkObj->referencedObject.get());
-            auto entityPtr = *reinterpret_cast<RE::hkpEntity**>(actionBase + 0x30);
-            if (entityPtr) return reinterpret_cast<RE::hkpRigidBody*>(entityPtr);
+            auto bhkObj = springRef.get();
+            if (bhkObj && bhkObj->referencedObject) {
+                auto* spring = static_cast<RE::hkpMouseSpringAction*>(bhkObj->referencedObject.get());
+                if (!a_requireEntity || spring->entity) return spring;
+            }
         }
         return nullptr;
     }
 
-    std::uintptr_t GetSpringActionBase(RE::PlayerCharacter* a_player)
+    RE::hkpEntity* GetSpringEntity(RE::PlayerCharacter* a_player)
     {
-        if (!a_player) return 0;
-        auto& grabSpring = a_player->GetPlayerRuntimeData().grabSpring;
-        for (auto& springRef : grabSpring) {
-            if (!springRef) continue;
-            auto bhkObj = reinterpret_cast<RE::bhkRefObject*>(springRef.get());
-            if (!bhkObj || !bhkObj->referencedObject) continue;
-            return reinterpret_cast<std::uintptr_t>(bhkObj->referencedObject.get());
-        }
-        return 0;
+        auto* spring = GetSpringAction(a_player, true);
+        return spring ? spring->entity : nullptr;
     }
+
+    void DispelGrabEffects(RE::MagicTarget* a_target)
+    {
+        auto* effects = a_target ? a_target->GetActiveEffectList() : nullptr;
+        if (!effects) return;
+        // Collect before dispelling: forced removal may mutate the active-effect list.
+        std::vector<RE::ActiveEffect*> matching;
+        for (auto* effect : *effects) {
+            auto* base = effect ? effect->GetBaseObject() : nullptr;
+            if (base && base->HasArchetype(RE::EffectArchetype::kGrabActor)) matching.push_back(effect);
+        }
+        for (auto* effect : matching) effect->Dispel(true);
+    }
+
 
     void PlaySoundForm(RE::FormID a_formID)
     {
@@ -145,7 +156,7 @@ namespace
             return;
         }
         RE::BSSoundHandle handle;
-        audioMgr->BuildSoundDataFromDescriptor(handle, descriptor, 0x1A);
+        if (!audioMgr->GetSoundHandle(handle, descriptor, 0x1A)) return;
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (player) {
             auto* node3D = player->Get3D();
@@ -342,10 +353,10 @@ void DragHandler::DrainStamina(float a_dt)
     float currentStamina = player->AsActorValueOwner()->GetActorValue(RE::ActorValue::kStamina);
     float drain = staminaDrainRate * a_dt;
     if (currentStamina - drain <= 0.0f) {
-        if (showNotifications) RE::DebugNotification("Too exhausted to keep holding");
+        if (showNotifications) RE::SendHUDMessage::ShowHUDMessage("Too exhausted to keep holding");
         DoRelease(0.0f);
     } else {
-        player->AsActorValueOwner()->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kStamina, -drain);
+        player->AsActorValueOwner()->ModActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kStamina, -drain);
     }
 }
 
@@ -391,55 +402,37 @@ void DragHandler::ThrowGrabbedObject(float a_heldDuration)
     auto player = RE::PlayerCharacter::GetSingleton();
     if (!player) return;
 
-    auto cell = player->GetParentCell();
-    auto bhkWorld = cell ? cell->GetbhkWorld() : nullptr;
-    if (!bhkWorld) return;
-
     float force = GetForce(a_heldDuration);
-
     RE::NiMatrix3 matrix = RE::PlayerCamera::GetSingleton()->cameraRoot->world.rotate;
-    float dirX = matrix.entry[0][1];
-    float dirY = matrix.entry[1][1];
-    float dirZ = matrix.entry[2][1];
-
-    RE::hkVector4 throwDir(dirX, dirY, dirZ, 0);
-
-    auto allBodies = CollectAllRigidBodies(grabbedActor);
+    RE::hkVector4 throwDir(matrix.entry[0][1], matrix.entry[1][1], matrix.entry[2][1], 0);
+    RE::ActorHandle actorHandle = grabbedActor ? grabbedActor->CreateRefHandle() : RE::ActorHandle();
 
     player->DestroyMouseSprings();
 
-    SKSE::log::info("ThrowGrabbedObject: force={:.1f}, bodies={}", force, allBodies.size());
-
-    auto capturedBodies = allBodies;
     auto capturedDir = throwDir;
-    float capturedForce = force;
-
-    SKSE::GetTaskInterface()->AddTask([capturedBodies, capturedDir, capturedForce]() {
-        auto player = RE::PlayerCharacter::GetSingleton();
-        if (!player) return;
-        auto cell = player->GetParentCell();
+    SKSE::GetTaskInterface()->AddTask([actorHandle, capturedDir, force]() {
+        auto actor = actorHandle.get();
+        if (!actor || !actor->Get3D()) return;
+        auto cell = actor->GetParentCell();
         auto bhkWorld = cell ? cell->GetbhkWorld() : nullptr;
         if (!bhkWorld) return;
         RE::BSWriteLockGuard locker(bhkWorld->worldLock);
+        auto bodies = CollectAllRigidBodies(actor.get());
 
-        for (auto* body : capturedBodies) {
-            if (!body) continue;
+        for (auto* body : bodies) {
             body->motion.SetLinearVelocity(RE::hkVector4());
             body->motion.SetAngularVelocity(RE::hkVector4());
         }
 
-        RE::hkVector4 impulse = capturedDir * capturedForce;
-        for (auto* body : capturedBodies) {
-            if (!body) continue;
+        RE::hkVector4 impulse = capturedDir * force;
+        for (auto* body : bodies) {
             float mass = body->motion.GetMass();
-            if (mass > 0.001f) {
-                body->motion.ApplyLinearImpulse(impulse * mass);
-            }
+            if (mass > 0.001f) body->motion.ApplyLinearImpulse(impulse * mass);
         }
-
-        SKSE::log::info("Throw: delayed zero + impulse on all {} bodies, force={:.1f}", capturedBodies.size(), capturedForce);
+        SKSE::log::info("Throw: delayed zero + impulse on all {} bodies, force={:.1f}", bodies.size(), force);
     });
 }
+
 
 RE::BSEventNotifyControl DragHandler::ProcessEvent(const RE::TESHitEvent* a_event, RE::BSTEventSource<RE::TESHitEvent>*)
 {
@@ -474,51 +467,54 @@ RE::BSEventNotifyControl DragHandler::ProcessEvent(const RE::TESHitEvent* a_even
 
         RE::hkVector4 springBodyVel;
         bool hasSpringVel = false;
-        auto* springBody = GetSpringBody(player);
+        auto* springBody = GetSpringEntity(player);
         if (springBody) {
             springBodyVel = springBody->motion.linearVelocity;
             hasSpringVel = true;
         }
+        RE::ActorHandle actorHandle = grabbedActor->CreateRefHandle();
+        auto capturedGeneration = grabGeneration;
 
-        auto allBodies = CollectAllRigidBodies(grabbedActor);
-        auto formID = grabbedActor->GetFormID();
 
         actionKeyHeld = false;
         actionNotified = false;
         spellCastDetected = false;
         grabKeyHeld = false;
-
-        auto capturedBodies = allBodies;
         auto capturedVel = springBodyVel;
         bool capturedHasVel = hasSpringVel;
 
-        SKSE::GetTaskInterface()->AddTask([this, formID, capturedBodies, capturedVel, capturedHasVel]() {
-            if (state != State::Dragging) return;
-            auto actor = RE::TESForm::LookupByID(formID)->As<RE::Actor>();
-            if (!actor || !grabbedActor || grabbedActor->GetFormID() != formID) return;
-
+        SKSE::GetTaskInterface()->AddTask([this, actorHandle, capturedGeneration, capturedVel, capturedHasVel]() {
+            if (state != State::Dragging || grabGeneration != capturedGeneration) return;
             auto p = RE::PlayerCharacter::GetSingleton();
-            if (!p) return;
+            if (p) {
+                auto engineHandle = p->GetPlayerRuntimeData().grabData.grabbedObject.native_handle();
+                if (engineHandle && engineHandle != actorHandle.native_handle()) return;
+            }
 
-            p->DestroyMouseSprings();
-            p->AsMagicTarget()->DispelEffectsWithArchetype(RE::EffectArchetype::kGrabActor, true);
-            grabbedActor->AsMagicTarget()->DispelEffectsWithArchetype(RE::EffectArchetype::kGrabActor, true);
-            grabbedActor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kParalysis, 0.0f);
-
-            if (capturedHasVel && !capturedBodies.empty()) {
-                auto cell = p->GetParentCell();
-                auto bhkWorld = cell ? cell->GetbhkWorld() : nullptr;
-                if (bhkWorld) {
-                    RE::BSWriteLockGuard locker(bhkWorld->worldLock);
-                    for (auto* body : capturedBodies) {
-                        if (body) body->motion.SetLinearVelocity(capturedVel);
-                    }
-                }
+            if (p) {
+                p->DestroyMouseSprings();
+                DispelGrabEffects(p->AsMagicTarget());
+            }
+            auto actor = actorHandle.get();
+            if (actor) {
+                DispelGrabEffects(actor->AsMagicTarget());
+                actor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kParalysis, 0.0f);
             }
 
             RestoreSpeed(p);
             grabbedActor = nullptr;
             state = State::None;
+
+            if (capturedHasVel && actor && actor->Get3D()) {
+                auto cell = actor->GetParentCell();
+                auto bhkWorld = cell ? cell->GetbhkWorld() : nullptr;
+                if (bhkWorld) {
+                    RE::BSWriteLockGuard locker(bhkWorld->worldLock);
+                    for (auto* body : CollectAllRigidBodies(actor.get())) {
+                        body->motion.SetLinearVelocity(capturedVel);
+                    }
+                }
+            }
             SKSE::log::info("Player hit drop complete (deferred)");
         });
     }
@@ -551,16 +547,16 @@ void DragHandler::HandleNewGrab(RE::PlayerCharacter* a_player)
 
     grabbedActor = grabbedRef->As<RE::Actor>();
     if (grabbedActor && IsValidTarget(grabbedActor)) {
+        ++grabGeneration;
         state = State::Dragging;
         grabStartTime = std::chrono::steady_clock::now();
         ApplySpeedBoost(a_player);
-
-        auto actionBase = GetSpringActionBase(a_player);
-        if (actionBase) {
-            *reinterpret_cast<float*>(actionBase + 0x60) = springDamping;
-            *reinterpret_cast<float*>(actionBase + 0x64) = springElasticity;
-            *reinterpret_cast<float*>(actionBase + 0x68) = springMaxForce;
+        if (auto* spring = GetSpringAction(a_player)) {
+            spring->springDamping = springDamping;
+            spring->springElasticity = springElasticity;
+            spring->maxRelativeForce = springMaxForce;
         }
+
 
         auto cell = a_player->GetParentCell();
         auto bhkWorld = cell ? cell->GetbhkWorld() : nullptr;
@@ -589,8 +585,8 @@ void DragHandler::HandleNewGrab(RE::PlayerCharacter* a_player)
                 }
             }
         }
-        a_player->AsMagicTarget()->DispelEffectsWithArchetype(RE::EffectArchetype::kGrabActor, true);
-        a_player->GetPlayerRuntimeData().grabbedObject = RE::ActorHandle();
+        DispelGrabEffects(a_player->AsMagicTarget());
+        a_player->GetPlayerRuntimeData().grabData.grabbedObject = RE::ActorHandle();
         grabbedActor = nullptr;
     }
 }
@@ -600,7 +596,7 @@ void DragHandler::HandleDragFrame(RE::PlayerCharacter* a_player)
     if (noSprint) {
         float stamina = a_player->AsActorValueOwner()->GetActorValue(RE::ActorValue::kStamina);
         if (stamina > 0.0f) {
-            a_player->AsActorValueOwner()->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kStamina, -stamina);
+            a_player->AsActorValueOwner()->ModActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kStamina, -stamina);
         }
     }
 
@@ -637,7 +633,7 @@ void DragHandler::HandleDragFrame(RE::PlayerCharacter* a_player)
         float threshold = (grabKeyHeld && chargeThrowOnHold) ? (grabHoldTimeout + throwDropWindow) : throwDropWindow;
         if (elapsed >= threshold) {
             actionNotified = true;
-            if (showNotifications) RE::DebugNotification("Ready to throw!");
+            if (showNotifications) RE::SendHUDMessage::ShowHUDMessage("Ready to throw!");
         }
     }
 
@@ -662,12 +658,12 @@ void DragHandler::HandleDragFrame(RE::PlayerCharacter* a_player)
     auto cell = a_player->GetParentCell();
     auto bhkWorld = cell ? cell->GetbhkWorld() : nullptr;
     if (bhkWorld && dragMaxVelocity > 0.0f) {
-        RE::hkpRigidBody* springBody = GetSpringBody(a_player);
+        RE::hkpEntity* springEntity = GetSpringEntity(a_player);
 
         RE::BSWriteLockGuard locker(bhkWorld->worldLock);
         auto allBodies = CollectAllRigidBodies(grabbedActor);
         for (auto* body : allBodies) {
-            if (!body || body == springBody) continue;
+            if (!body || static_cast<RE::hkpEntity*>(body) == springEntity) continue;
             auto& vel = body->motion.linearVelocity;
             float speed = std::sqrt(vel.quad.m128_f32[0] * vel.quad.m128_f32[0] +
                                     vel.quad.m128_f32[1] * vel.quad.m128_f32[1] +
@@ -695,7 +691,7 @@ void DragHandler::HandleSwingImpact(RE::PlayerCharacter* a_player)
     RE::NiPoint3 thrownPos = thrown3D->world.translate;
 
     float springSpeed = 0.0f;
-    auto* springBody = GetSpringBody(a_player);
+    auto* springBody = GetSpringEntity(a_player);
     if (springBody) {
         auto& lv = springBody->motion.linearVelocity;
         springSpeed = std::sqrt(lv.quad.m128_f32[0] * lv.quad.m128_f32[0] +
@@ -711,7 +707,9 @@ void DragHandler::HandleSwingImpact(RE::PlayerCharacter* a_player)
     auto cell = a_player->GetParentCell();
     if (!cell) return;
 
-    cell->ForEachReferenceInRange(thrownPos, swingRadius, [&](RE::TESObjectREFR& a_ref) {
+    cell->ForEachReferenceInRange(thrownPos, swingRadius, [&](RE::TESObjectREFR* a_reference) {
+        if (!a_reference) return RE::BSContainer::ForEachResult::kContinue;
+        auto& a_ref = *a_reference;
         if (a_ref.GetFormID() == a_player->GetFormID()) return RE::BSContainer::ForEachResult::kContinue;
         if (grabbedActor && a_ref.GetFormID() == grabbedActor->GetFormID()) return RE::BSContainer::ForEachResult::kContinue;
 
@@ -775,9 +773,9 @@ void DragHandler::HandleSwingImpact(RE::PlayerCharacter* a_player)
                 float dmgScale = 1.0f + (springSpeed * impactDamageSpeedScale);
                 float hitDmg = impactDamage * dmgScale;
                 float thrownDmg = impactDamage * impactDamageThrownMult * dmgScale;
-                actor->AsActorValueOwner()->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kHealth, -hitDmg);
+                actor->AsActorValueOwner()->ModActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kHealth, -hitDmg);
                 if (grabbedActor && !grabbedActor->IsDead()) {
-                    grabbedActor->AsActorValueOwner()->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kHealth, -thrownDmg);
+                    grabbedActor->AsActorValueOwner()->ModActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kHealth, -thrownDmg);
                 }
             }
         } else if (swingImpactStatics) {
@@ -835,7 +833,8 @@ void DragHandler::HandleImpactTracking()
         return;
     }
 
-    auto thrownActor = RE::TESForm::LookupByID(impactTrackFormID)->As<RE::Actor>();
+    auto thrownForm = RE::TESForm::LookupByID(impactTrackFormID);
+    auto thrownActor = thrownForm ? thrownForm->As<RE::Actor>() : nullptr;
     if (!thrownActor) {
         state = State::None;
         return;
@@ -875,7 +874,9 @@ void DragHandler::HandleImpactTracking()
     auto processLists = RE::ProcessLists::GetSingleton();
     if (!processLists) return;
 
-    processLists->ForAllActors([&](RE::Actor& actor) {
+    processLists->ForAllActors([&](RE::Actor* a_actor) {
+        if (!a_actor) return RE::BSContainer::ForEachResult::kContinue;
+        auto& actor = *a_actor;
         if (actor.GetFormID() == impactTrackFormID) return RE::BSContainer::ForEachResult::kContinue;
         if (actor.IsPlayerRef()) return RE::BSContainer::ForEachResult::kContinue;
         if (actor.IsDead()) return RE::BSContainer::ForEachResult::kContinue;
@@ -897,10 +898,10 @@ void DragHandler::HandleImpactTracking()
                 float dmgScale = 1.0f + (avgSpeed * impactDamageSpeedScale);
                 float hitDmg = impactDamage * dmgScale;
                 float thrownDmg = impactDamage * impactDamageThrownMult * dmgScale;
-                actor.AsActorValueOwner()->RestoreActorValue(
+                actor.AsActorValueOwner()->ModActorValue(
                     RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kHealth, -hitDmg);
                 if (thrownActor && !thrownActor->IsDead()) {
-                    thrownActor->AsActorValueOwner()->RestoreActorValue(
+                    thrownActor->AsActorValueOwner()->ModActorValue(
                         RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kHealth, -thrownDmg);
                 }
                 SKSE::log::info("  Impact damage: {:.1f} (hit), {:.1f} (thrown), speedScale={:.2f}",
@@ -1030,39 +1031,34 @@ void DragHandler::DoRelease(float a_heldDuration)
         RE::hkVector4 springBodyVel;
         bool hasSpringVel = false;
         if (player) {
-            auto* springBody = GetSpringBody(player);
+            auto* springBody = GetSpringEntity(player);
             if (springBody) {
                 springBodyVel = springBody->motion.linearVelocity;
                 hasSpringVel = true;
             }
         }
-
-        auto allBodies = CollectAllRigidBodies(grabbedActor);
+        RE::ActorHandle actorHandle = grabbedActor ? grabbedActor->CreateRefHandle() : RE::ActorHandle();
 
         if (player) {
             player->DestroyMouseSprings();
-            player->AsMagicTarget()->DispelEffectsWithArchetype(RE::EffectArchetype::kGrabActor, true);
+            DispelGrabEffects(player->AsMagicTarget());
         }
         if (grabbedActor) {
-            grabbedActor->AsMagicTarget()->DispelEffectsWithArchetype(RE::EffectArchetype::kGrabActor, true);
+            DispelGrabEffects(grabbedActor->AsMagicTarget());
             grabbedActor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kParalysis, 0.0f);
         }
 
-        if (hasSpringVel && !allBodies.empty()) {
-            auto capturedBodies = allBodies;
+        if (hasSpringVel) {
             auto capturedVel = springBodyVel;
-            SKSE::GetTaskInterface()->AddTask([capturedBodies, capturedVel]() {
-                auto p = RE::PlayerCharacter::GetSingleton();
-                if (!p) return;
-                auto cell = p->GetParentCell();
+            SKSE::GetTaskInterface()->AddTask([actorHandle, capturedVel]() {
+                auto actor = actorHandle.get();
+                if (!actor || !actor->Get3D()) return;
+                auto cell = actor->GetParentCell();
                 auto bhkWorld = cell ? cell->GetbhkWorld() : nullptr;
                 if (!bhkWorld) return;
                 RE::BSWriteLockGuard locker(bhkWorld->worldLock);
-
-                for (auto* body : capturedBodies) {
-                    if (body) {
-                        body->motion.SetLinearVelocity(capturedVel);
-                    }
+                for (auto* body : CollectAllRigidBodies(actor.get())) {
+                    body->motion.SetLinearVelocity(capturedVel);
                 }
             });
         }
@@ -1083,7 +1079,7 @@ void DragHandler::DoRelease(float a_heldDuration)
         actionNotified = false;
         spellCastDetected = false;
         RestoreSpeed(player);
-        if (showNotifications) RE::DebugNotification("Dropped");
+        if (showNotifications) RE::SendHUDMessage::ShowHUDMessage("Dropped");
         PlaySoundForm(dropSoundForm);
         return;
     }
@@ -1095,13 +1091,13 @@ void DragHandler::DoRelease(float a_heldDuration)
 
     char buf[64];
     std::snprintf(buf, sizeof(buf), "Threw! (%.0f force)", force);
-    if (showNotifications) RE::DebugNotification(buf);
+    if (showNotifications) RE::SendHUDMessage::ShowHUDMessage(buf);
 
     if (player) {
-        player->AsMagicTarget()->DispelEffectsWithArchetype(RE::EffectArchetype::kGrabActor, true);
+        DispelGrabEffects(player->AsMagicTarget());
     }
     if (grabbedActor) {
-        grabbedActor->AsMagicTarget()->DispelEffectsWithArchetype(RE::EffectArchetype::kGrabActor, true);
+        DispelGrabEffects(grabbedActor->AsMagicTarget());
         grabbedActor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kParalysis, 0.0f);
         impactTrackFormID = grabbedActor->GetFormID();
         impactTrackStart = std::chrono::steady_clock::now();
@@ -1125,7 +1121,7 @@ bool DragHandler::ReleaseNPC(bool a_throw, float a_force)
     RE::hkVector4 springBodyVel;
     bool hasSpringVel = false;
     if (player && !a_throw) {
-        auto* springBody = GetSpringBody(player);
+        auto* springBody = GetSpringEntity(player);
         if (springBody) {
             springBodyVel = springBody->motion.linearVelocity;
             hasSpringVel = true;
@@ -1140,32 +1136,29 @@ bool DragHandler::ReleaseNPC(bool a_throw, float a_force)
     }
 
     if (grabbedActor) {
-        grabbedActor->AsMagicTarget()->DispelEffectsWithArchetype(RE::EffectArchetype::kGrabActor, true);
+        DispelGrabEffects(grabbedActor->AsMagicTarget());
         grabbedActor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kParalysis, 0.0f);
     }
 
     if (hasSpringVel && grabbedActor) {
-        auto allBodies = CollectAllRigidBodies(grabbedActor);
-        if (!allBodies.empty()) {
-            auto capturedBodies = allBodies;
-            auto capturedVel = springBodyVel;
-            SKSE::GetTaskInterface()->AddTask([capturedBodies, capturedVel]() {
-                auto p = RE::PlayerCharacter::GetSingleton();
-                if (!p) return;
-                auto cell = p->GetParentCell();
-                auto bhkWorld = cell ? cell->GetbhkWorld() : nullptr;
-                if (!bhkWorld) return;
-                RE::BSWriteLockGuard locker(bhkWorld->worldLock);
-                for (auto* body : capturedBodies) {
-                    if (body) body->motion.SetLinearVelocity(capturedVel);
-                }
-            });
-        }
+        RE::ActorHandle actorHandle = grabbedActor->CreateRefHandle();
+        auto capturedVel = springBodyVel;
+        SKSE::GetTaskInterface()->AddTask([actorHandle, capturedVel]() {
+            auto actor = actorHandle.get();
+            if (!actor || !actor->Get3D()) return;
+            auto cell = actor->GetParentCell();
+            auto bhkWorld = cell ? cell->GetbhkWorld() : nullptr;
+            if (!bhkWorld) return;
+            RE::BSWriteLockGuard locker(bhkWorld->worldLock);
+            for (auto* body : CollectAllRigidBodies(actor.get())) {
+                body->motion.SetLinearVelocity(capturedVel);
+            }
+        });
     }
 
     SKSE::log::info("Released (throw={}, force={:.1f})", a_throw, a_force);
 
-    if (showNotifications) RE::DebugNotification(a_throw ? "Threw!" : "Released");
+    if (showNotifications) RE::SendHUDMessage::ShowHUDMessage(a_throw ? "Threw!" : "Released");
     if (!a_throw) PlaySoundForm(dropSoundForm);
     RestoreSpeed(player);
     grabbedActor = nullptr;
@@ -1207,11 +1200,12 @@ void DragHandler::TryGrabWithSpell()
         auto player = RE::PlayerCharacter::GetSingleton();
         if (!player) return;
 
-        auto target = RE::TESForm::LookupByID(targetFormID)->As<RE::Actor>();
+        auto targetForm = RE::TESForm::LookupByID(targetFormID);
+        auto target = targetForm ? targetForm->As<RE::Actor>() : nullptr;
         if (!target) return;
 
-        player->GetPlayerRuntimeData().grabObjectWeight = 0.0f;
-        player->GetPlayerRuntimeData().grabbedObject = target->CreateRefHandle();
+        player->GetPlayerRuntimeData().grabData.grabObjectWeight = 0.0f;
+        player->GetPlayerRuntimeData().grabData.grabbedObject = target->CreateRefHandle();
 
         auto caster = player->GetMagicCaster(RE::MagicSystem::CastingSource::kRightHand);
         if (!caster) return;
