@@ -2,6 +2,8 @@
 
 The INI is beside the loaded DLL (`SKSE/Plugins/DragAndDrop.ini`), resolved by its module path, and read once at SKSE post-load. Restart the game after changes. Shipped values below are not missing-key defaults: both contracts are preserved by the migration.
 
+Private-workspace file: `DragAndDrop/SKSE/Plugins/DragAndDrop.ini`. Installed and public-source paths remain `SKSE/Plugins/DragAndDrop.ini`; the module-relative lookup is unchanged.
+
 Keep values clean; put comments on separate lines. Booleans accept exact lowercase `true` or `1` as true; other strings are false. Numeric readers use `atof` and base-0 `strtol`, not strict validation. The shipped action-key line contains a trailing comment; its numeric prefix is 34. Do not copy that pattern to boolean values. Floats should be ordinary decimal numbers; integer/Skyrim.esm sound IDs may use `0x`.
 
 ## General
@@ -94,4 +96,4 @@ Sound values are Skyrim.esm sound-descriptor FormIDs. Zero disables the sound.
 | `fImpactForceSpeedScale` | 1.0 | 1.0 | Existing speed-dependent force scaling |
 | `fImpactDamageSpeedScale` | 1.0 | 1.0 | Existing `1 + speed * scale` damage scaling |
 
-Source authority: `SKSE/src/DragHandler.cpp::LoadSettings`, `OnKeyDown`, `OnKeyUp`, `GetForce`, drag/impact handlers; `SKSE/Plugins/DragAndDrop.ini`; `Source/Scripts/DragDropImpactScript.psc`. These are source contracts, not proof of runtime acceptance for a new candidate.
+Source authority in the private workspace: `SKSE/src/DragHandler.cpp::LoadSettings`, `OnKeyDown`, `OnKeyUp`, `GetForce`, drag/impact handlers; `DragAndDrop/SKSE/Plugins/DragAndDrop.ini`; `DragAndDrop/Source/Scripts/DragDropImpactScript.psc`. The public-source checkout retains `SKSE/Plugins` and `Source/Scripts` without the private mod-folder prefix. These are source contracts, not proof of runtime acceptance for a new candidate.

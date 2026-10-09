@@ -1,113 +1,69 @@
 # Drag & Drop
 
-A Skyrim SE mod that lets you grab, drag, and throw NPCs using Havok physics. Self-contained — no other mods required (but pairs well with [Fableforge](https://www.nexusmods.com/profile/FableForge)'s [Knockout and Surrender](https://www.nexusmods.com/skyrimspecialedition/mods/40556) and [Knock and Surrender or Execute Patch](https://www.nexusmods.com/skyrimspecialedition/mods/173676) by me).
+A Skyrim SE mod that lets you grab, drag, and throw NPCs using Havok physics. No external gameplay-mod dependencies. Pairs well with [Knockout and Surrender](https://www.nexusmods.com/skyrimspecialedition/mods/40556) and [Knock and Surrender or Execute Patch](https://www.nexusmods.com/skyrimspecialedition/mods/173676).
 
-**Source code:** [GitHub](https://github.com/Gerkinfeltser/DragAndDrop)
+**Source code:** [GitHub](https://github.com/Gerkinfeltser/DragAndDrop/tree/compat/skyrim-1.7.x)
 
 ## Requirements
 
-- Skyrim Special Edition with matching SKSE and Address Library. Core gameplay of the `0.1.99-alpha` migration candidate was maintainer-tested on `1.6.1170`; queued-transition safety and other runtimes remain unverified. See [per-runtime evidence](docs/MINLL-MIGRATION.md#runtime-acceptance-matrix).
-- SKSE64
-- Address Library for SKSE Plugins
+- Skyrim Special Edition with matching SKSE64 and Address Library.
+- Core gameplay of `0.1.99-alpha` was maintainer-tested on `1.6.1170`; queued-transition safety and full existing-save reload acceptance remain unverified.
+- Other runtimes, including `1.7.99` and `1.7.104`, still need tester reports. This is not a verified 1.7 compatibility release. See [per-runtime evidence](https://github.com/Gerkinfeltser/DragAndDrop/blob/compat/skyrim-1.7.x/docs/MINLL-MIGRATION.md#runtime-acceptance-matrix).
 
 ## Install
 
-Drop the contents of the zip into your `Data` folder, or install via MO2/Vortex. That's it.
+Install the ZIP with MO2/Vortex, or copy its contents into Skyrim's `Data` folder. Launch through SKSE. Close Skyrim before replacing mod files, and keep your existing INI settings when upgrading.
 
 ## Uninstall
 
-Remove whenever you like. The mod is save-game safe — no quests, aliases, or permanent cell edits. The grab spell stays in your spell list after removal but does nothing. If removed mid-drag, your speed may not restore (fix with `player.setav speedmult 100` in console).
+The mod adds no permanent quests, aliases or cell edits. The grab spell may remain in your spell list but does nothing after removal. If removed mid-drag, your speed may not restore; fix with `player.setav speedmult 100` in the console. Back up your saves before changing mods.
 
 ## How to Use
 
-The mod adds a Lesser Power to your character. It works automatically — no need to equip or activate anything from the power menu.
+The mod adds a Lesser Power. With action-key grab enabled, you do not need to equip or cast it through the power menu.
 
-### Controls (G key by default)
+### Controls (G by default)
 
-**To grab:**
-- Look at an NPC and hold **G** — the grab starts on keydown
+- **Grab:** look at an eligible NPC and hold G; grab starts on keydown.
+- **Drop:** while dragging, tap G; the NPC keeps momentum from your camera swing.
+- **Throw:** while dragging, hold G to charge, then release. Longer holds increase force up to the configured limit. HUD notifications are configurable.
+- **Tap-grab:** release the initial grab before `fGrabHoldTimeout` and the NPC stays grabbed.
+- **Initial hold-release:** release after that timeout for a charged release with shipped `bChargeThrowOnHold=true`; set it false for hold-drop.
 
-**To drop:**
-- While dragging, **tap G** — the NPC drops with momentum from your camera swing
+### Eligible targets
 
-**To throw:**
-- While dragging, **hold G** — a throw charges up (you'll see a notification)
-- **Release G** — the NPC launches with ramping force. Longer hold = bigger throw
+Dead and paralyzed NPCs are eligible. Followers are enabled by default; hostile NPCs are disabled by default. Settings can change those restrictions. Ghosts, children by default, and actors with paralysis-immunity keywords are excluded.
 
-**Grab-hold-drop:**
-- Hold G on an NPC to grab
-- Release G quickly (within the hold timeout) — NPC stays grabbed
-- Release after the timeout — charged release with shipped `bChargeThrowOnHold=true`; set it false for hold-drop.
+### Impacts
 
-### What Can You Grab?
-
-By default you can grab:
-- **Dead NPCs** — always
-- **Paralyzed NPCs** — always
-- **Followers** — enabled by default
-- **Hostile NPCs** — disabled by default, see INI
-
-You cannot grab ghosts, children (by default), or NPCs with paralysis immunity keywords.
-
-### Swing Impact
-
-While dragging, the NPC acts as a battering ram. Swing them into nearby actors and they'll get knocked back. Clutter and dynamic objects also get pushed around.
-
-### Throw Impact
-
-After throwing, the NPC is tracked for a few seconds. Any actors it passes near get knocked back. Damage can also be configured in the INI.
+Swinging a dragged NPC can knock back nearby actors and push dynamic clutter. After a throw, the NPC is tracked briefly for further knockback. Impact damage can be configured in the INI.
 
 ## INI Settings
 
-All settings are in `SKSE/Plugins/DragAndDrop.ini`. Edit with any text editor. Changes require a game restart.
+Edit `SKSE/Plugins/DragAndDrop.ini` inside this mod. Restart Skyrim after changing settings.
 
-**Important:** Do not add inline comments with semicolons — they break the parser. Keep values clean:
+**Do not add inline semicolon comments:** keep values clean, especially booleans.
 
 ```ini
 bEnableMod = true
 ```
 
-See [INI settings](docs/INI-SETTINGS.md) for current sections, shipped values, missing-key fallbacks, and descriptions. These values differ; deleting the INI does not reproduce the shipped configuration.
-
-## Build and package
-
-Use a C++23-capable MSVC developer shell with CMake, Ninja, and vcpkg. Configure a fresh repository-local tree; ordinary builds never install the DLL:
-
-```powershell
-cmake -S SKSE -B SKSE/build-minll/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows-static -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-cmake --build SKSE/build-minll/release --parallel 6
-powershell -NoProfile -NonInteractive -File make_zip.ps1 -Dll SKSE/build-minll/release/DragAndDrop.dll
-```
-
-The public source repository contains build inputs, not the development workspace's packaging scripts or ESP/SEQ/compiled assets. Run the first two commands there; run packaging and deployment commands only in the development workspace with the matching assets.
-
-CMake source-builds the pinned MinLL SDK with SE+AE enabled and VR disabled, verifying revision/license and the shared non-VR ABI overlay. Keep the plugin and vcpkg compiler/CRT profiles coherent. Version and candidate suffix are owned by `SKSE/CMakeLists.txt`; change them there, not through a label cache override.
-
-Packaging requires an explicit DLL, prints its SHA-256, verifies the archived member against it, and includes the SDK notice. Compare the printed hash to the accepted build hash. Packaging is not installation or runtime acceptance.
-Candidate archives are stored and committed in the private repository as `_releases/DragAndDrop_v0-1-99-alpha.zip`; only archive filenames replace version dots with hyphens. Native metadata and logs keep `0.1.99` / `0.1.99-alpha`.
-
-Only after installation approval, back up the current DLL/INI and save/co-save checkpoint, then explicitly deploy:
-
-```powershell
-Copy-Item SKSE/build-minll/release/DragAndDrop.dll SKSE/Plugins/DragAndDrop.dll -Force
-```
-
-`SKSE/Plugins` is MO2-linked in the development workspace. Installation, game launch, `publish_source.ps1` (copies and commits public source), commits, and pushes require separate approval. See [migration evidence and tester checklist](docs/MINLL-MIGRATION.md) for ABI audit, prerequisites, and exact-runtime acceptance.
-
+The supplied INI and missing-key fallbacks differ; deleting the INI does not reproduce the shipped configuration. Detailed sections, values and behavior are in [INI settings](https://github.com/Gerkinfeltser/DragAndDrop/blob/compat/skyrim-1.7.x/docs/INI-SETTINGS.md); release packages also include `docs/INI-SETTINGS.md`.
 
 ## Known Issues
 
-- **Power menu bypasses filters.** Casting the grab spell from the power menu ignores target restrictions (dev/debug mode).
+- Casting the grab power through the power menu bypasses target filters (dev/debug behavior).
+- Reloaded knocked-out NPCs may be stiff or frozen; freshly knocked-out NPCs can drag normally. This pre-existing issue remains unresolved.
 
 ## Early Access
 
-This mod is in early development. Back up your saves. While the mod is designed to be save-safe and shouldn't cause issues, removing it mid-drag could leave your speed altered (see Uninstall above).
+This mod is in early development. Back up your saves and report the exact game version, effective INI, observed behavior and `DragAndDrop.log` when reporting a bug. Build success alone does not establish runtime compatibility.
 
 ## Credits
 
-- [GrabAndThrow](https://www.nexusmods.com/skyrimspecialedition/mods/120460) by powerof3 — Havok spring access and throw impulse patterns
-- [Seize NPCs](https://www.nexusmods.com/skyrimspecialedition/mods/135703) — Mod inspiration & reference
+- [GrabAndThrow](https://www.nexusmods.com/skyrimspecialedition/mods/120460) by powerof3 — Havok spring access and throw impulse patterns.
+- [Seize NPCs](https://www.nexusmods.com/skyrimspecialedition/mods/135703) — inspiration and reference.
 
 ## License
 
-Drag & Drop is MIT-licensed, copyright 2026 Gerkinfeltser. The canonical `LICENSE` is in the public-source checkout (`_releases/DragAndDrop/LICENSE` in the development workspace); packaging includes it at the archive root. Dependency copyrights and terms are retained separately in the CommonLibSSE license and third-party notices.
+MIT-licensed, copyright 2026 Gerkinfeltser. Release packages and the public source repository include `LICENSE`. Dependency copyrights and terms are retained separately in the CommonLibSSE license and third-party notices.

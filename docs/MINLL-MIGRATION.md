@@ -4,6 +4,9 @@
 
 Candidate migration to MinLL/CommonLibVR `550cc4fb9114649dcf526d1f3d73d710c5d7003b`, SE+AE enabled, VR disabled. Numeric native version: `0.1.99`; package label: `v0.1.99-alpha`. No deployment, game launch, commit, or publication is part of build verification. Source and offline checks do not certify game behavior.
 
+Current private-workspace path context: installable assets now live under `DragAndDrop/` (DLL/INI, ESP, SEQ, compiled and source scripts). Paths in the frozen/pre-migration observations below retain their original provenance; installed Data-relative paths and public-source paths are unchanged. Native source/build paths remain rooted at `SKSE/`.
+
+
 ## Frozen consumer contracts
 
 - `Source/Scripts/DragDrop.psc` and `SKSE/src/main.cpp`: global native `bool ReleaseNPC()`, `bool ThrowNPC(float force)`, `Actor GetGrabbedNPC()`, `bool IsDragging()`, registered on `DragDrop`. No binding or serialization change.
